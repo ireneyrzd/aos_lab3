@@ -53,7 +53,6 @@ void stack_check(void *top_of_stack, uint64_t argc, char **argv);
 
 //
 // Setup the loadable segments: parse the ELF headers and store segment info.
-// For simplicity, we assume a 64-bit ELF file.
 //
 void load_elf_segments(const char *filename)
 {
@@ -129,7 +128,7 @@ void load_elf_segments(const char *filename)
         segments[num_segments].prot = prot;
         num_segments++;
     }
-    printf("done proccesing program headers\n");
+    printf("done processing program headers\n");
 
     // Map the segments.
     for (int i = 0; i < num_segments; i++)
@@ -139,6 +138,7 @@ void load_elf_segments(const char *filename)
         uint64_t seg_filesz = segments[i].filesz;
         uint64_t seg_memsz = segments[i].memsz;
         off_t seg_offset = segments[i].offset;
+        int prot = segments[i].prot;
 
         // Get system page size
         long page_size = sysconf(_SC_PAGESIZE);
@@ -149,69 +149,43 @@ void load_elf_segments(const char *filename)
         }
 
         // Calculate aligned addresses
-        uint64_t aligned_vaddr = seg_vaddr & ~(page_size - 1);
-        uint64_t offset_in_page = seg_vaddr - aligned_vaddr;
-
-        // Calculate total memory range needed for the segment
+        uint64_t aligned_vaddr = PAGE_ALIGN(seg_vaddr, page_size);
         uint64_t mem_end = seg_vaddr + seg_memsz;
-        uint64_t aligned_mem_end = (mem_end + page_size - 1) & ~(page_size - 1);
+        uint64_t aligned_mem_end = PAGE_ALIGN(mem_end + page_size - 1, page_size);
         size_t total_mem_size = aligned_mem_end - aligned_vaddr;
 
-        // Reserve full memory region
-        if (mmap((void *)aligned_vaddr, total_mem_size,
-                 PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0) == MAP_FAILED)
+        // Map the entire region with temporary write permissions
+        void *mapped = mmap((void *)aligned_vaddr, total_mem_size,
+                            PROT_READ | PROT_WRITE, // Temporary permissions
+                            MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                            -1, 0);
+        if (mapped == MAP_FAILED)
         {
-            perror("mmap reserve region");
+            perror("mmap segment");
             exit(EXIT_FAILURE);
         }
 
-        // Map file-backed portion
+        // Load file content directly into memory
         if (seg_filesz > 0)
         {
-            uint64_t file_end = seg_offset + seg_filesz;
-            uint64_t aligned_file_end = (file_end + page_size - 1) & ~(page_size - 1);
-            size_t file_map_size = aligned_file_end - (seg_offset & ~(page_size - 1));
-
-            void *mapped = mmap((void *)aligned_vaddr, file_map_size,
-                                segments[i].prot,
-                                MAP_PRIVATE | MAP_FIXED, elf_fd,
-                                seg_offset & ~(page_size - 1));
-            if (mapped == MAP_FAILED)
+            ssize_t bytes_read = pread(elf_fd, (void *)seg_vaddr, seg_filesz, seg_offset);
+            if (bytes_read != seg_filesz)
             {
-                perror("mmap file-backed segment");
+                perror("pread");
                 exit(EXIT_FAILURE);
             }
         }
 
-        // Handle zero-initialized portion
-        if (seg_memsz > seg_filesz)
+        // Set final memory protections
+        if (mprotect(mapped, total_mem_size, prot) < 0)
         {
-            uint64_t zero_start = seg_vaddr + seg_filesz;
-            uint64_t zero_end = seg_vaddr + seg_memsz;
-            uint64_t aligned_zero_start = zero_start & ~(page_size - 1);
-            uint64_t aligned_zero_end = (zero_end + page_size - 1) & ~(page_size - 1);
-            size_t zero_length = aligned_zero_end - aligned_zero_start;
-
-            if (zero_length > 0)
-            {
-                void *mapped = mmap((void *)aligned_zero_start, zero_length,
-                                    segments[i].prot,
-                                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-                if (mapped == MAP_FAILED)
-                {
-                    perror("mmap zero-initialized segment");
-                    exit(EXIT_FAILURE);
-                }
-
-                // Calculate portion to zero out
-                size_t start_offset = zero_start - aligned_zero_start;
-                size_t end_offset = zero_end - aligned_zero_start;
-                memset((char *)mapped + start_offset, 0, end_offset - start_offset);
-            }
+            perror("mprotect");
+            exit(EXIT_FAILURE);
         }
     }
 
     printf("done mapping segments\n");
+    // close(elf_fd); // Close ELF file after loading all segments
 }
 
 //
@@ -440,7 +414,7 @@ void stack_check(void *top_of_stack, uint64_t argc, char **argv)
     Elf64_auxv_t *auxv_null = auxv_start;
     while (auxv_null->a_type != AT_NULL)
     {
-        printf("auxv: %lx %lx\n", auxv_null->a_type == AT_NULL ? 0 : "NULL", auxv_null->a_un.a_val);
+        // printf("auxv: %lx %lx\n", auxv_null->a_type == AT_NULL ? 0 : "NULL", auxv_null->a_un.a_val);
         auxv_null++;
     }
     printf("aux count: %lu\n", auxv_null - auxv_start);
