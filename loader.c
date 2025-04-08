@@ -26,6 +26,7 @@
 // gcc -T default.ld -g -o loader loader.c -static -lc
 // ./loader ./hello
 // gdb --args ./loader ./hello
+// gcc -g -static -o hook_test hook_test.c
 
 // store loadable segment info.
 typedef struct
@@ -36,12 +37,6 @@ typedef struct
     off_t offset;    // offset in file
     int prot;        // protection flags
 } segment_t;
-
-typedef struct
-{
-    long a_type;
-    long a_val;
-} AuxvEntry;
 
 static segment_t segments[MAX_SEGMENTS];
 static int num_segments = 0;
@@ -57,7 +52,7 @@ void stack_check(void *top_of_stack, uint64_t argc, char **argv);
 void load_elf_segments(const char *filename)
 {
     elf_fd = open(filename, O_RDONLY);
-    printf("elf_fd: %d\n", elf_fd);
+    // printf("elf_fd: %d\n", elf_fd);
     if (elf_fd < 0)
     {
         perror("open ELF file");
@@ -70,7 +65,7 @@ void load_elf_segments(const char *filename)
         close(elf_fd);
         exit(EXIT_FAILURE);
     }
-    printf("st.st_size: %ld\n", st.st_size);
+    // printf("st.st_size: %ld\n", st.st_size);
     // Read the ELF header.
     Elf64_Ehdr ehdr;
     if (read(elf_fd, &ehdr, sizeof(ehdr)) != sizeof(ehdr))
@@ -79,7 +74,7 @@ void load_elf_segments(const char *filename)
         close(elf_fd);
         exit(EXIT_FAILURE);
     }
-    printf("ehdr.e_phoff: %ld\n", ehdr.e_phoff);
+    // printf("ehdr.e_phoff: %ld\n", ehdr.e_phoff);
     // Check that it's a valid ELF file.
     if (memcmp(ehdr.e_ident, ELFMAG, SELFMAG) != 0)
     {
@@ -87,7 +82,7 @@ void load_elf_segments(const char *filename)
         close(elf_fd);
         exit(EXIT_FAILURE);
     }
-    printf("ehdr.e_phnum: %d\n", ehdr.e_phnum);
+    // printf("ehdr.e_phnum: %d\n", ehdr.e_phnum);
     // Seek to the program header table.
     if (lseek(elf_fd, ehdr.e_phoff, SEEK_SET) < 0)
     {
@@ -95,7 +90,7 @@ void load_elf_segments(const char *filename)
         close(elf_fd);
         exit(EXIT_FAILURE);
     }
-    printf("num of segments: %d\n", num_segments);
+    // printf("num of segments: %d\n", num_segments);
     // Process each program header.
     for (int i = 0; i < ehdr.e_phnum; i++)
     {
@@ -128,12 +123,12 @@ void load_elf_segments(const char *filename)
         segments[num_segments].prot = prot;
         num_segments++;
     }
-    printf("done processing program headers\n");
+    // printf("done processing program headers\n");
 
     // Map the segments.
     for (int i = 0; i < num_segments; i++)
     {
-        printf("mapping segment %d\n", i);
+        // printf("mapping segment %d\n", i);
         uint64_t seg_vaddr = segments[i].vaddr;
         uint64_t seg_filesz = segments[i].filesz;
         uint64_t seg_memsz = segments[i].memsz;
@@ -184,7 +179,7 @@ void load_elf_segments(const char *filename)
         }
     }
 
-    printf("done mapping segments\n");
+    // printf("done mapping segments\n");
     // close(elf_fd); // Close ELF file after loading all segments
 }
 
@@ -194,7 +189,7 @@ void load_elf_segments(const char *filename)
 void *setup_new_stack(int argc, char **argv, uint64_t *envp_start, uint64_t *envp_end,
                       Elf64_auxv_t *auxv_start, Elf64_auxv_t *auxv_end)
 {
-    size_t stack_size = PAGE_ALIGN(1024 * 1024, page_size); // 1 MB stack
+    size_t stack_size = PAGE_ALIGN((long)1024 * 1024 * (long)10000, page_size); // 1 MB stack
 
     // Allocate the stack with RW permissions.
     void *new_stack = mmap(NULL, stack_size, PROT_READ | PROT_WRITE,
@@ -207,7 +202,7 @@ void *setup_new_stack(int argc, char **argv, uint64_t *envp_start, uint64_t *env
 
     // Top of the stack, stack grows downwards
     char *top_of_stack = (char *)new_stack + stack_size;
-    printf("top_of_stack: %p\n", top_of_stack);
+    // printf("top_of_stack: %p\n", top_of_stack);
 
     // Align the stack pointer to 16 bytes.
     top_of_stack = (char *)((uintptr_t)top_of_stack & ~0xF);
@@ -215,7 +210,7 @@ void *setup_new_stack(int argc, char **argv, uint64_t *envp_start, uint64_t *env
     // PUSH(char *, NULL); // Terminate auxv
 
     // Push auxiliary vector entries
-    printf("starting to push auxv. start: %p, end: %p\n", auxv_start, auxv_end);
+    // printf("starting to push auxv. start: %p, end: %p\n", auxv_start, auxv_end);
     for (Elf64_auxv_t *p = auxv_end; p >= auxv_start; p--)
     {
         // printf("auxv: %lx %lx\n", p->a_type == AT_NULL ? 0 : "NULL", p->a_un.a_val);
@@ -240,7 +235,7 @@ void *setup_new_stack(int argc, char **argv, uint64_t *envp_start, uint64_t *env
     // Push argc
     PUSH(long, argc);
 
-    printf("top_of_stack: %p\n", top_of_stack);
+    // printf("top_of_stack: %p\n", top_of_stack);
     return (void *)top_of_stack;
 }
 
@@ -312,12 +307,12 @@ int main(int argc, char *argv[])
     load_elf_segments(argv[1]);
 
     // Print out the loaded segments.
-    printf("Loaded %d segments:\n", num_segments);
-    for (int i = 0; i < num_segments; i++)
-    {
-        printf("  Segment %d: vaddr=0x%lx, filesz=0x%lx, memsz=0x%lx, prot=0x%x\n",
-               i, segments[i].vaddr, segments[i].filesz, segments[i].memsz, segments[i].prot);
-    }
+    // printf("Loaded %d segments:\n", num_segments);
+    // for (int i = 0; i < num_segments; i++)
+    // {
+    //     printf("  Segment %d: vaddr=0x%lx, filesz=0x%lx, memsz=0x%lx, prot=0x%x\n",
+    //            i, segments[i].vaddr, segments[i].filesz, segments[i].memsz, segments[i].prot);
+    // }
 
     // run stack check for loader stack
     stack_check((void *)(argv - 1), argc, argv);
@@ -330,7 +325,7 @@ int main(int argc, char *argv[])
     {
         end_of_envp++;
     }
-    printf("end of envp: %p\n", end_of_envp);
+    // printf("end of envp: %p\n", end_of_envp);
     Elf64_auxv_t *start_of_auxv = (Elf64_auxv_t *)(end_of_envp + 1); // auxv[0]
     Elf64_auxv_t *end_of_auxv = &start_of_auxv[0];
     while (end_of_auxv->a_type != AT_NULL)
@@ -341,7 +336,7 @@ int main(int argc, char *argv[])
     // Set up a new stack for the loaded program.
     void *new_stack = setup_new_stack(argc, argv, start_of_envp, end_of_envp, start_of_auxv, end_of_auxv);
 
-    printf("New stack set up at %p\n", new_stack);
+    // printf("New stack set up at %p\n", new_stack);
 
     // Check the stack.
     stack_check(new_stack, argc, argv);
@@ -360,7 +355,7 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
     void *entry_point = (void *)ehdr.e_entry;
-    printf("Transferring control to entry point: %p\n", entry_point);
+    // printf("Transferring control to entry point: %p\n", entry_point);
 
     // Close the ELF file; further demand paging may require it open.
     // (For a robust solution, you might keep it open until the new program is running.)
@@ -381,16 +376,16 @@ int main(int argc, char *argv[])
  */
 void stack_check(void *top_of_stack, uint64_t argc, char **argv)
 {
-    printf("----- stack check -----\n");
+    // printf("----- stack check -----\n");
 
     assert(((uint64_t)top_of_stack) % 8 == 0);
-    printf("top of stack is 8-byte aligned\n");
+    // printf("top of stack is 8-byte aligned\n");
 
     uint64_t *stack = (uint64_t *)top_of_stack;
     uint64_t actual_argc = *(stack++);
-    printf("argc: %lu\n", actual_argc);
+    // printf("argc: %lu\n", actual_argc);
     assert(actual_argc == argc);
-    printf("argc matches\n");
+    // printf("argc matches\n");
 
     for (int i = 0; i < argc; i++)
     {
@@ -408,7 +403,7 @@ void stack_check(void *top_of_stack, uint64_t argc, char **argv)
         // printf("env %d: %p\n", *(stack - 1));
     }
 
-    printf("env count: %d\n", envp_count);
+    // printf("env count: %d\n", envp_count);
 
     Elf64_auxv_t *auxv_start = (Elf64_auxv_t *)stack;
     Elf64_auxv_t *auxv_null = auxv_start;
@@ -417,6 +412,6 @@ void stack_check(void *top_of_stack, uint64_t argc, char **argv)
         // printf("auxv: %lx %lx\n", auxv_null->a_type == AT_NULL ? 0 : "NULL", auxv_null->a_un.a_val);
         auxv_null++;
     }
-    printf("aux count: %lu\n", auxv_null - auxv_start);
-    printf("----- end stack check -----\n");
+    // printf("aux count: %lu\n", auxv_null - auxv_start);
+    // printf("----- end stack check -----\n");
 }
